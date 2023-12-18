@@ -30,39 +30,39 @@ def main():
     logger.configure()
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_model_and_diffusion(
+    model, diffusion = create_model_and_diffusion( #创建模型UNet和扩散
         **args_to_dict(args, model_and_diffusion_defaults().keys())
     )
-    model.load_state_dict(
+    model.load_state_dict( #加载模型和参数
         dist_util.load_state_dict(args.model_path, map_location="cpu")
     )
     model.to(dist_util.dev())
     if args.use_fp16:
         model.convert_to_fp16()
-    model.eval()
+    model.eval() #分类器切换到eval模式
 
     logger.log("loading classifier...")
-    classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys()))
-    classifier.load_state_dict(
+    classifier = create_classifier(**args_to_dict(args, classifier_defaults().keys())) #创建分类器【EncoderUNetModel】
+    classifier.load_state_dict(#加载分类器和参数
         dist_util.load_state_dict(args.classifier_path, map_location="cpu")
     )
     classifier.to(dist_util.dev())
     if args.classifier_use_fp16:
         classifier.convert_to_fp16()
-    classifier.eval()
+    classifier.eval()#分类器切换到eval模式
 
     def cond_fn(x, t, y=None):
-        assert y is not None
-        with th.enable_grad():
-            x_in = x.detach().requires_grad_(True)
-            logits = classifier(x_in, t)
-            log_probs = F.log_softmax(logits, dim=-1)
-            selected = log_probs[range(len(logits)), y.view(-1)]
-            return th.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale
+        assert y is not None #断言y不为空
+        with th.enable_grad(): #启用梯度计算上下文
+            x_in = x.detach().requires_grad_(True) #将x从计算图中分离出来，设置为需要梯度计算
+            logits = classifier(x_in, t)# 使用分类器将x_in和时间步t作为输入，得到预测的logits
+            log_probs = F.log_softmax(logits, dim=-1) # 对logits进行softmax，得到log_probs
+            selected = log_probs[range(len(logits)), y.view(-1)]#从log_probs中选出标签y对应的对数概率值log_prob
+            return th.autograd.grad(selected.sum(), x_in)[0] * args.classifier_scale # 对选取的对数概率值进行求和，并计算其相对于x_in的梯度，最后将梯度乘以缩放因子args.classifier_scale
 
     def model_fn(x, t, y=None):
         assert y is not None
-        return model(x, t, y if args.class_cond else None)
+        return model(x, t, y if args.class_cond else None) #使用模型将x和时间步t作为输入，得到输出【应该是预测的噪声和预测的与方差相关的向量】
 
     logger.log("sampling...")
     all_images = []
@@ -76,11 +76,11 @@ def main():
         sample_fn = (
             diffusion.p_sample_loop if not args.use_ddim else diffusion.ddim_sample_loop
         )
-        sample = sample_fn(
+        sample = sample_fn( # 在use_ddim=False时，是diffusion.p_sample_loop
             model_fn,
             (args.batch_size, 3, args.image_size, args.image_size),
             clip_denoised=args.clip_denoised,
-            model_kwargs=model_kwargs,
+            model_kwargs=model_kwargs, #类标签
             cond_fn=cond_fn,
             device=dist_util.dev(),
         )

@@ -32,36 +32,36 @@ def main():
     logger.configure()
 
     logger.log("creating model and diffusion...")
-    model, diffusion = create_classifier_and_diffusion(
+    model, diffusion = create_classifier_and_diffusion( #创建分类器【EncoderUNetModel】和扩散SpacedDiffusion
         **args_to_dict(args, classifier_and_diffusion_defaults().keys())
     )
     model.to(dist_util.dev())
     if args.noised:
-        schedule_sampler = create_named_schedule_sampler(
-            args.schedule_sampler, diffusion
+        schedule_sampler = create_named_schedule_sampler( # 创建了一个UniformSampler
+            args.schedule_sampler, diffusion #schedule_sampler 默认= uniform
         )
 
     resume_step = 0
-    if args.resume_checkpoint:
+    if args.resume_checkpoint: #如果有resume_checkpoint，就续上
         resume_step = parse_resume_step_from_filename(args.resume_checkpoint)
         if dist.get_rank() == 0:
             logger.log(
                 f"loading model from checkpoint: {args.resume_checkpoint}... at {resume_step} step"
             )
-            model.load_state_dict(
+            model.load_state_dict( #加载模型和参数
                 dist_util.load_state_dict(
                     args.resume_checkpoint, map_location=dist_util.dev()
                 )
             )
 
     # Needed for creating correct EMAs and fp16 parameters.
-    dist_util.sync_params(model.parameters())
+    dist_util.sync_params(model.parameters()) #同步参数
 
-    mp_trainer = MixedPrecisionTrainer(
+    mp_trainer = MixedPrecisionTrainer( #创建MixedPrecisionTrainer
         model=model, use_fp16=args.classifier_use_fp16, initial_lg_loss_scale=16.0
     )
 
-    model = DDP(
+    model = DDP( #创建DDP，分布式数据并行
         model,
         device_ids=[dist_util.dev()],
         output_device=dist_util.dev(),
@@ -71,7 +71,7 @@ def main():
     )
 
     logger.log("creating data loader...")
-    data = load_data(
+    data = load_data( #加载数据
         data_dir=args.data_dir,
         batch_size=args.batch_size,
         image_size=args.image_size,
@@ -89,67 +89,68 @@ def main():
         val_data = None
 
     logger.log(f"creating optimizer...")
-    opt = AdamW(mp_trainer.master_params, lr=args.lr, weight_decay=args.weight_decay)
+    opt = AdamW(mp_trainer.master_params, lr=args.lr, weight_decay=args.weight_decay) #创建优化器
     if args.resume_checkpoint:
         opt_checkpoint = bf.join(
             bf.dirname(args.resume_checkpoint), f"opt{resume_step:06}.pt"
         )
-        logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}")
-        opt.load_state_dict(
+        logger.log(f"loading optimizer state from checkpoint: {opt_checkpoint}") 
+        opt.load_state_dict(#加载优化器状态
             dist_util.load_state_dict(opt_checkpoint, map_location=dist_util.dev())
         )
 
     logger.log("training classifier model...")
 
-    def forward_backward_log(data_loader, prefix="train"):
-        batch, extra = next(data_loader)
-        labels = extra["y"].to(dist_util.dev())
+    def forward_backward_log(data_loader, prefix="train"): # 在main()中定义了一个函数forward_backward_log
+        batch, extra = next(data_loader) #取出一个batch
+        labels = extra["y"].to(dist_util.dev()) #取出标签
 
-        batch = batch.to(dist_util.dev())
+        batch = batch.to(dist_util.dev()) #将batch放到GPU上
         # Noisy images
-        if args.noised:
-            t, _ = schedule_sampler.sample(batch.shape[0], dist_util.dev())
-            batch = diffusion.q_sample(batch, t)
+        if args.noised: # 默认是True
+            t, _ = schedule_sampler.sample(batch.shape[0], dist_util.dev()) # 默认是uniform，采样获得时间和权重（权重忽略了）
+            batch = diffusion.q_sample(batch, t) # 将数据和时间步传递给q_sample，将x0和t传递给q_sample，得到x_t，这是含噪声的图像
         else:
             t = th.zeros(batch.shape[0], dtype=th.long, device=dist_util.dev())
 
-        for i, (sub_batch, sub_labels, sub_t) in enumerate(
+        for i, (sub_batch, sub_labels, sub_t) in enumerate( #每次迭代，将batch分成多个子batch，每个子batch的大小是microbatch
             split_microbatches(args.microbatch, batch, labels, t)
         ):
-            logits = model(sub_batch, timesteps=sub_t)
-            loss = F.cross_entropy(logits, sub_labels, reduction="none")
+            logits = model(sub_batch, timesteps=sub_t) #将含噪声的图像和时间步传递给model（就是分类器），得到logits（实际就是各个类别的概率，但是好像没有经过softmax归一化）
+            loss = F.cross_entropy(logits, sub_labels, reduction="none") #计算交叉熵loss，logits是模型输出[N,C]，sub_labels是标签[N]
 
             losses = {}
-            losses[f"{prefix}_loss"] = loss.detach()
-            losses[f"{prefix}_acc@1"] = compute_top_k(
+            losses[f"{prefix}_loss"] = loss.detach() #这里detach不是原地操作，而是返回一个新的tensor，不会影响原来的tensor
+            losses[f"{prefix}_acc@1"] = compute_top_k( #计算top1准确率
                 logits, sub_labels, k=1, reduction="none"
             )
-            losses[f"{prefix}_acc@5"] = compute_top_k(
+            losses[f"{prefix}_acc@5"] = compute_top_k( #计算top5准确率
                 logits, sub_labels, k=5, reduction="none"
             )
-            log_loss_dict(diffusion, sub_t, losses)
+            log_loss_dict(diffusion, sub_t, losses) #写日志
             del losses
-            loss = loss.mean()
+            loss = loss.mean() #计算loss的均值
             if loss.requires_grad:
                 if i == 0:
                     mp_trainer.zero_grad()
-                mp_trainer.backward(loss * len(sub_batch) / len(batch))
+                mp_trainer.backward(loss * len(sub_batch) / len(batch)) #反向传播，计算梯度
+                #函数定义完毕，下面还是使用这个函数
 
-    for step in range(args.iterations - resume_step):
+    for step in range(args.iterations - resume_step): #迭代，iterations=150000
         logger.logkv("step", step + resume_step)
         logger.logkv(
             "samples",
             (step + resume_step + 1) * args.batch_size * dist.get_world_size(),
         )
-        if args.anneal_lr:
+        if args.anneal_lr: #默认是False,如果是True，就调整学习率
             set_annealed_lr(opt, args.lr, (step + resume_step) / args.iterations)
-        forward_backward_log(data)
-        mp_trainer.optimize(opt)
+        forward_backward_log(data) #调用forward_backward_log函数，会对一个batch的数据进行前向传播和反向传播，计算loss，计算梯度
+        mp_trainer.optimize(opt) #更新参数
         if val_data is not None and not step % args.eval_interval:
             with th.no_grad():
                 with model.no_sync():
-                    model.eval()
-                    forward_backward_log(val_data, prefix="val")
+                    model.eval() #评估模式
+                    forward_backward_log(val_data, prefix="val")#调用forward_backward_log函数，进行验证
                     model.train()
         if not step % args.log_interval:
             logger.dumpkvs()
@@ -159,7 +160,7 @@ def main():
             and not (step + resume_step) % args.save_interval
         ):
             logger.log("saving model...")
-            save_model(mp_trainer, opt, step + resume_step)
+            save_model(mp_trainer, opt, step + resume_step) #保存模型
 
     if dist.get_rank() == 0:
         logger.log("saving model...")

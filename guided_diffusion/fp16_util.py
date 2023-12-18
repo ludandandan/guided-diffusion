@@ -35,7 +35,7 @@ def convert_module_to_f32(l):
 def make_master_params(param_groups_and_shapes):
     """
     Copy model parameters into a (differently-shaped) list of full-precision
-    parameters.
+    parameters. 将模型参数复制到一个（形状不同的）全精度参数列表中。
     """
     master_params = []
     for param_group, shape in param_groups_and_shapes:
@@ -81,9 +81,9 @@ def unflatten_master_params(param_group, master_param):
 
 def get_param_groups_and_shapes(named_model_params):
     named_model_params = list(named_model_params)
-    scalar_vector_named_params = (
+    scalar_vector_named_params = ( #这是一个元组，第一个元素是列表，包含哪些参数维度不大于1的模型参数和他们的名称；第二元素是-1
         [(n, p) for (n, p) in named_model_params if p.ndim <= 1],
-        (-1),
+        (-1), 
     )
     matrix_named_params = (
         [(n, p) for (n, p) in named_model_params if p.ndim > 1],
@@ -155,17 +155,17 @@ class MixedPrecisionTrainer:
         initial_lg_loss_scale=INITIAL_LOG_LOSS_SCALE,
     ):
         self.model = model
-        self.use_fp16 = use_fp16
-        self.fp16_scale_growth = fp16_scale_growth
+        self.use_fp16 = use_fp16 #是否使用fp16
+        self.fp16_scale_growth = fp16_scale_growth #fp16的缩放增长率
 
-        self.model_params = list(self.model.parameters())
-        self.master_params = self.model_params
+        self.model_params = list(self.model.parameters())#模型参数
+        self.master_params = self.model_params#master参数
         self.param_groups_and_shapes = None
-        self.lg_loss_scale = initial_lg_loss_scale
+        self.lg_loss_scale = initial_lg_loss_scale #初始的loss scale
 
-        if self.use_fp16:
+        if self.use_fp16: #如果使用fp16
             self.param_groups_and_shapes = get_param_groups_and_shapes(
-                self.model.named_parameters()
+                self.model.named_parameters()#获取模型的参数
             )
             self.master_params = make_master_params(self.param_groups_and_shapes)
             self.model.convert_to_fp16()

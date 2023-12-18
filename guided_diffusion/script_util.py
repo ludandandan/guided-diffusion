@@ -61,7 +61,7 @@ def model_and_diffusion_defaults():
         use_fp16=False,
         use_new_attention_order=False,
     )
-    res.update(diffusion_defaults())
+    res.update(diffusion_defaults()) #diffusion_defaults()返回一个字典，但是这个字典里的key在res里面没有，所以会将这个字典的key和value添加到res里面
     return res
 
 
@@ -96,7 +96,7 @@ def create_model_and_diffusion(
     use_fp16,
     use_new_attention_order,
 ):
-    model = create_model(
+    model = create_model( # 创建UNet model
         image_size,
         num_channels,
         num_res_blocks,
@@ -114,7 +114,7 @@ def create_model_and_diffusion(
         use_fp16=use_fp16,
         use_new_attention_order=use_new_attention_order,
     )
-    diffusion = create_gaussian_diffusion(
+    diffusion = create_gaussian_diffusion( #SpacedDiffusion
         steps=diffusion_steps,
         learn_sigma=learn_sigma,
         noise_schedule=noise_schedule,
@@ -202,7 +202,7 @@ def create_classifier_and_diffusion(
     rescale_timesteps,
     rescale_learned_sigmas,
 ):
-    classifier = create_classifier(
+    classifier = create_classifier( # EncoderUNetModel
         image_size,
         classifier_use_fp16,
         classifier_width,
@@ -435,7 +435,7 @@ def add_dict_to_argparser(parser, default_dict):
 
 
 def args_to_dict(args, keys):
-    return {k: getattr(args, k) for k in keys}
+    return {k: getattr(args, k) for k in keys} #返回一个字典，key是keys里面的元素，value是args对象中属性名称是k的值
 
 
 def str2bool(v):
